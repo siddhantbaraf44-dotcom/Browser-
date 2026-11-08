@@ -1,8 +1,5 @@
-name: Build Ice (Android APK)
+name: Build Ice APK
 
-# Works in two layouts:
-#  A) the repo contains the full project (extracted), or
-#  B) the repo contains only this file + Ice-source.zip (uploaded without extracting).
 on:
   workflow_dispatch:
     inputs:
@@ -10,18 +7,18 @@ on:
         description: "Build variant"
         default: arm64
         type: choice
-        options: [arm64, arm, x86_64]
-  push:
-    tags: ["v*"]
+        options:
+          - arm64
+          - arm
+          - x86_64
 
 jobs:
   build:
-    # Building GeckoView needs ~50 GB disk and hours of CPU. A free runner may be too small;
-    # set repo variable BUILD_RUNNER to a larger runner label (e.g. ubuntu-latest-16-cores) if it fails.
     runs-on: ${{ vars.BUILD_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 360
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Free disk space
         run: |
@@ -29,20 +26,21 @@ jobs:
           sudo docker image prune --all --force || true
           df -h /
 
-      - name: Unpack Ice-source.zip (layout B)
+      - name: Unzip Ice-source.zip
         run: |
-          if [ ! -d scripts ] && [ -f Ice-source.zip ]; then
-            unzip -q Ice-source.zip -d ice-src
-            shopt -s dotglob && mv ice-src/* . && rmdir ice-src
-          fi
-          test -f scripts/build.sh || { echo "Project files not found"; exit 1; }
+          test -f Ice-source.zip || { echo "Ice-source.zip not found"; exit 1; }
+          mkdir ice-src
+          unzip -q Ice-source.zip -d ice-src
+          cp -a ice-src/. .
+          rm -rf ice-src
+          test -f scripts/build.sh || { echo "scripts/build.sh missing after unzip"; exit 1; }
 
       - name: Build builder image
         run: docker build -t ice-builder -f Containerfile .
 
-      - name: Get sources, patch, build
+      - name: Get sources, patch and build
         env:
-          ARCH: ${{ github.event.inputs.arch || 'arm64' }}
+          ARCH: ${{ github.event.inputs.arch }}
         run: |
           docker run --rm -v "$PWD:/app" -e IRONFOX_RELEASE=1 ice-builder /bin/bash -euxo pipefail -c "
             ./scripts/get_sources.sh
@@ -50,10 +48,10 @@ jobs:
             ./scripts/build.sh $ARCH
           "
 
-      - name: Upload APKs
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Ice-${{ github.event.inputs.arch || 'arm64' }}
+          name: Ice-${{ github.event.inputs.arch }}
           path: |
             outputs/apk/**
             outputs/unsigned/**
