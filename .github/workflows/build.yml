@@ -1,0 +1,70 @@
+name: Build Ice (Android APK)
+
+# Works in two layouts:
+#  A) the repo contains the full project (extracted), or
+#  B) the repo contains only this file + Ice-source.zip (uploaded without extracting).
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: "Build variant"
+        default: arm64
+        type: choice
+        options: [arm64, arm, x86_64]
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    # Building GeckoView needs ~50 GB disk and hours of CPU. A free runner may be too small;
+    # set repo variable BUILD_RUNNER to a larger runner label (e.g. ubuntu-latest-16-cores) if it fails.
+    runs-on: ${{ vars.BUILD_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          sudo docker image prune --all --force || true
+          df -h /
+
+      - name: Unpack Ice-source.zip (layout B)
+        run: |
+          if [ ! -d scripts ] && [ -f Ice-source.zip ]; then
+            unzip -q Ice-source.zip -d ice-src
+            shopt -s dotglob && mv ice-src/* . && rmdir ice-src
+          fi
+          test -f scripts/build.sh || { echo "Project files not found"; exit 1; }
+
+      - name: Build builder image
+        run: docker build -t ice-builder -f Containerfile .
+
+      - name: Get sources, patch, build
+        env:
+          ARCH: ${{ github.event.inputs.arch || 'arm64' }}
+        run: |
+          docker run --rm -v "$PWD:/app" -e IRONFOX_RELEASE=1 ice-builder /bin/bash -euxo pipefail -c "
+            ./scripts/get_sources.sh
+            ./scripts/prebuild.sh
+            ./scripts/build.sh $ARCH
+          "
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ice-${{ github.event.inputs.arch || 'arm64' }}
+          path: |
+            outputs/apk/**
+            outputs/unsigned/**
+          if-no-files-found: error
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            outputs/**/*.log
+            build/**/*.log
+          if-no-files-found: ignore
